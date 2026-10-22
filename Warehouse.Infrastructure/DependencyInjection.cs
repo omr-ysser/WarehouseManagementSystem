@@ -6,6 +6,7 @@ using Warehouse.Application.Abstractions;
 using Warehouse.Infrastructure.Identity;
 using Warehouse.Infrastructure.Persistence;
 using Warehouse.Infrastructure.Seeding;
+using Warehouse.Infrastructure.Persistence.Repositories;
 
 namespace Warehouse.Infrastructure;
 
@@ -51,7 +52,7 @@ public static class DependencyInjection
         // Register Infrastructure services.
         services.AddScoped<IIdentityService, IdentityService>();
         services.AddScoped<IdentitySeeder>();
-
+        services.AddScoped<IInventoryData, InventoryData>();
         return services;
     }
 }

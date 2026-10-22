@@ -2,6 +2,11 @@
 using Microsoft.AspNetCore.Mvc;
 using Warehouse.Application.Abstractions;
 
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
+using Warehouse.Application.Abstractions;
+using Warehouse.Application.Security;
+
 namespace Warehouse.Api.Controllers;
 
 [ApiController]
@@ -20,9 +25,21 @@ public sealed class MeController : ControllerBase
     public async Task<IActionResult> Get(
         CancellationToken cancellationToken)
     {
-        var userId = User.FindFirst("sub")!.Value;
+        var userId = User.FindFirst("sub")?.Value;
 
-        return Ok(await _identity.GetCurrentUserAsync(
-            userId, cancellationToken));
+        if (string.IsNullOrWhiteSpace(userId))
+        {
+            return Unauthorized();
+        }
+
+        var currentUser = await _identity.GetCurrentUserAsync(
+            userId,
+            cancellationToken);
+
+        return Ok(currentUser with
+        {
+            Navigation = NavigationCatalog.GetItems(
+                currentUser.Permissions)
+        });
     }
 }

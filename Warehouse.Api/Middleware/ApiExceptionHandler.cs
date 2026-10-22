@@ -1,4 +1,5 @@
-﻿using Microsoft.AspNetCore.Diagnostics;
+﻿using FluentValidation;
+using Microsoft.AspNetCore.Diagnostics;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
@@ -10,10 +11,26 @@ public sealed class ApiExceptionHandler : IExceptionHandler
 {
     private readonly ILogger<ApiExceptionHandler> _logger;
 
-    public ApiExceptionHandler(
-        ILogger<ApiExceptionHandler> logger)
+    public ApiExceptionHandler(ILogger<ApiExceptionHandler> logger)
     {
         _logger = logger;
+    }
+
+    private static SqlException? FindSqlException(Exception exception)
+    {
+        Exception? current = exception;
+
+        while (current is not null)
+        {
+            if (current is SqlException sql)
+            {
+                return sql;
+            }
+
+            current = current.InnerException;
+        }
+
+        return null;
     }
 
     public async ValueTask<bool> TryHandleAsync(
@@ -21,67 +38,93 @@ public sealed class ApiExceptionHandler : IExceptionHandler
         Exception exception,
         CancellationToken cancellationToken)
     {
-        var status = StatusCodes.Status500InternalServerError;
-        var detail = "An unexpected error occurred.";
+        ProblemDetails problem;
 
-        switch (exception)
+        if (exception is ValidationException validation)
         {
-            case AppException app:
+            var errors = validation.Errors
+                .GroupBy(x => x.PropertyName)
+                .ToDictionary(
+                    x => x.Key,
+                    x => x.Select(e => e.ErrorMessage)
+                        .Distinct()
+                        .ToArray());
+
+            problem = new ValidationProblemDetails(errors)
+            {
+                Status = 400,
+                Title = "Validation failed"
+            };
+        }
+        else
+        {
+            var sql = FindSqlException(exception);
+
+            var status = 500;
+            var detail = "An unexpected error occurred.";
+
+            if (exception is AppException app)
+            {
                 status = app.StatusCode;
                 detail = app.Message;
-                break;
-
-            case DbUpdateConcurrencyException:
-                status = StatusCodes.Status409Conflict;
+            }
+            else if (exception is DbUpdateConcurrencyException)
+            {
+                status = 409;
                 detail = "The data changed. Reload and try again.";
-                break;
+            }
+            else if (sql?.Number is 2601 or 2627)
+            {
+                status = 409;
+                detail =
+                    "A unique value already exists or a concurrent insert conflicted.";
+            }
+            else if (sql?.Number == 547)
+            {
+                status = 409;
+                detail =
+                    "The operation conflicts with related data or database constraints.";
+            }
+            else if (sql?.Number == 1205)
+            {
+                status = 409;
+                detail =
+                    "A concurrent operation conflicted. Reload and try again.";
+            }
 
-            case DbUpdateException update
-                when update.InnerException is SqlException
-                {
-                    Number: 2601 or 2627
-                }:
-                status = StatusCodes.Status409Conflict;
-                detail = "A unique value already exists.";
-                break;
+            if (status == 500)
+            {
+                _logger.LogError(
+                    exception,
+                    "Unhandled API exception. TraceId: {TraceId}",
+                    httpContext.TraceIdentifier);
+            }
 
-            case DbUpdateException update
-                when update.InnerException is SqlException
-                {
-                    Number: 547
-                }:
-                status = StatusCodes.Status409Conflict;
-                detail = "The operation conflicts with related data or constraints.";
-                break;
-
-            case SqlException { Number: 1205 }:
-                status = StatusCodes.Status409Conflict;
-                detail = "A concurrent operation conflicted. Try again.";
-                break;
-        }
-
-        if (status == 500)
-        {
-            _logger.LogError(exception, "Unhandled API exception.");
-        }
-
-        httpContext.Response.StatusCode = status;
-
-        await httpContext.Response.WriteAsJsonAsync(
-            new ProblemDetails
+            problem = new ProblemDetails
             {
                 Status = status,
                 Title = status switch
                 {
                     400 => "Invalid request",
                     401 => "Unauthorized",
+                    403 => "Forbidden",
                     404 => "Resource not found",
                     409 => "Conflict",
                     _ => "Server error"
                 },
-                Detail = detail,
-                Instance = httpContext.Request.Path.Value
-            },
+                Detail = detail
+            };
+        }
+
+        problem.Instance = httpContext.Request.Path.Value;
+        problem.Extensions["traceId"] = httpContext.TraceIdentifier;
+
+        httpContext.Response.StatusCode = problem.Status ?? 500;
+
+        await httpContext.Response.WriteAsJsonAsync(
+            problem,
+            options: null,
+            contentType: "application/problem+json",
             cancellationToken: cancellationToken);
 
         return true;

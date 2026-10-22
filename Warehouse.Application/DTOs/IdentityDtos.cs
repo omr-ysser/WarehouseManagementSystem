@@ -1,9 +1,5 @@
 ﻿using System;
 using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
-
 using System.ComponentModel.DataAnnotations;
 
 namespace Warehouse.Application.DTOs;
@@ -119,6 +115,19 @@ public sealed record UserResponse(
     string? RoleId,
     string? RoleName);
 
+// Navigation
+
+public sealed record NavigationItemResponse(
+    string Key,
+    string Label,
+    string Path);
+
+// Current user
+
 public sealed record CurrentUserResponse(
     UserResponse User,
-    IReadOnlyList<string> Permissions);
+    IReadOnlyList<string> Permissions)
+{
+    public IReadOnlyList<NavigationItemResponse> Navigation { get; init; }
+        = Array.Empty<NavigationItemResponse>();
+}

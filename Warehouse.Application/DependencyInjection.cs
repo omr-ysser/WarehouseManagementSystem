@@ -1,0 +1,31 @@
+﻿using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+
+using FluentValidation;
+using Microsoft.Extensions.DependencyInjection;
+using Warehouse.Application.Abstractions;
+using Warehouse.Application.Services;
+using Warehouse.Application.Validation;
+
+
+
+namespace Warehouse.Application;
+
+public static class DependencyInjection
+{
+    public static IServiceCollection AddApplication(
+        this IServiceCollection services)
+    {
+        services.AddScoped<IAuthService, AuthService>();
+
+        services.AddScoped<IInventoryService, InventoryService>();
+
+        services.AddValidatorsFromAssemblyContaining<
+            LoginRequestValidator>();
+
+        return services;
+    }
+}
