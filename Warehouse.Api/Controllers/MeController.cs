@@ -1,10 +1,6 @@
 ﻿using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Warehouse.Application.Abstractions;
-
-using Microsoft.AspNetCore.Authorization;
-using Microsoft.AspNetCore.Mvc;
-using Warehouse.Application.Abstractions;
 using Warehouse.Application.Security;
 
 namespace Warehouse.Api.Controllers;

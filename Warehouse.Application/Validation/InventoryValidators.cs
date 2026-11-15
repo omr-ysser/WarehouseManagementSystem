@@ -7,8 +7,6 @@ using System.Threading.Tasks;
 using FluentValidation;
 using Warehouse.Application.DTOs;
 
-using FluentValidation;
-using Warehouse.Application.DTOs;
 
 namespace Warehouse.Application.Validation;
 

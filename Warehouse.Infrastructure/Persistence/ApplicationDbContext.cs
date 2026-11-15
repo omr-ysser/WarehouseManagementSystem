@@ -35,6 +35,15 @@ public class ApplicationDbContext
 
     public DbSet<RolePermission> RolePermissions
         => Set<RolePermission>();
+    public DbSet<Rider> Riders => Set<Rider>();
+
+    public DbSet<Tournament> Tournaments => Set<Tournament>();
+
+    public DbSet<RiderTournament> RiderTournaments
+        => Set<RiderTournament>();
+
+    public DbSet<RiderTournamentHorse> RiderTournamentHorses
+        => Set<RiderTournamentHorse>();
 
     protected override void OnModelCreating(ModelBuilder builder)
     {

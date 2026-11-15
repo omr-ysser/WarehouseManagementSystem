@@ -1,13 +1,23 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
-
-namespace Warehouse.Application.Security;
+﻿namespace Warehouse.Application.Security;
 
 public static class PermissionCatalog
 {
+    // Declare before All because All uses this array.
+    public static readonly string[] RiderModule =
+    [
+        "Riders.View",
+        "Riders.Create",
+        "Riders.Edit",
+        "Riders.Delete",
+        "Riders.ChangeStatus",
+        "Riders.ManageTournaments",
+
+        "Tournaments.View",
+        "Tournaments.Create",
+        "Tournaments.Edit",
+        "Tournaments.Delete"
+    ];
+
     public static readonly string[] All =
     [
         "Users.View",
@@ -40,11 +50,15 @@ public static class PermissionCatalog
         "Transactions.Edit",
         "Transactions.Delete",
 
-        "Stock.View"
+        "Stock.View",
+
+        .. RiderModule
     ];
 
     public static bool IsBuiltIn(string key)
     {
-        return All.Contains(key, StringComparer.OrdinalIgnoreCase);
+        return All.Contains(
+            key,
+            StringComparer.OrdinalIgnoreCase);
     }
 }

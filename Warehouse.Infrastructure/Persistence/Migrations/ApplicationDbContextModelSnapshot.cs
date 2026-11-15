@@ -173,6 +173,124 @@ namespace Warehouse.Infrastructure.Persistence.Migrations
                         });
                 });
 
+            modelBuilder.Entity("Warehouse.Domain.Entities.Rider", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("Id"));
+
+                    b.Property<string>("Email")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("nvarchar(256)");
+
+                    b.Property<string>("FullName")
+                        .IsRequired()
+                        .HasMaxLength(150)
+                        .HasColumnType("nvarchar(150)");
+
+                    b.Property<int>("HandicapLevel")
+                        .HasColumnType("int");
+
+                    b.Property<string>("ImageUrl")
+                        .HasMaxLength(2048)
+                        .HasColumnType("nvarchar(2048)");
+
+                    b.Property<bool>("IsAvailable")
+                        .HasColumnType("bit");
+
+                    b.Property<string>("Nationality")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.Property<string>("NormalizedEmail")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("nvarchar(256)");
+
+                    b.Property<string>("PhoneNumber")
+                        .HasMaxLength(30)
+                        .HasColumnType("nvarchar(30)");
+
+                    b.Property<string>("PoloTeam")
+                        .HasMaxLength(150)
+                        .HasColumnType("nvarchar(150)");
+
+                    b.Property<DateTime>("RegisteredAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<byte[]>("RowVersion")
+                        .IsConcurrencyToken()
+                        .IsRequired()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("rowversion");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("NormalizedEmail")
+                        .IsUnique();
+
+                    b.ToTable("Riders", (string)null);
+                });
+
+            modelBuilder.Entity("Warehouse.Domain.Entities.RiderTournament", b =>
+                {
+                    b.Property<int>("RiderId")
+                        .HasColumnType("int");
+
+                    b.Property<int>("TournamentId")
+                        .HasColumnType("int");
+
+                    b.Property<bool>("IsAvailable")
+                        .HasColumnType("bit");
+
+                    b.Property<byte[]>("RowVersion")
+                        .IsConcurrencyToken()
+                        .IsRequired()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("rowversion");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(30)
+                        .HasColumnType("nvarchar(30)");
+
+                    b.HasKey("RiderId", "TournamentId");
+
+                    b.HasIndex("TournamentId");
+
+                    b.ToTable("RiderTournaments", (string)null);
+                });
+
+            modelBuilder.Entity("Warehouse.Domain.Entities.RiderTournamentHorse", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("Id"));
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(150)
+                        .HasColumnType("nvarchar(150)");
+
+                    b.Property<int>("RiderId")
+                        .HasColumnType("int");
+
+                    b.Property<int>("TournamentId")
+                        .HasColumnType("int");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("RiderId", "TournamentId");
+
+                    b.ToTable("RiderTournamentHorses", (string)null);
+                });
+
             modelBuilder.Entity("Warehouse.Domain.Entities.StockTransaction", b =>
                 {
                     b.Property<int>("Id")
@@ -217,6 +335,45 @@ namespace Warehouse.Infrastructure.Persistence.Migrations
                         {
                             t.HasCheckConstraint("CK_StockTransactions_Quantity_NotZero", "[Quantity] <> 0");
                         });
+                });
+
+            modelBuilder.Entity("Warehouse.Domain.Entities.Tournament", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("Id"));
+
+                    b.Property<string>("City")
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.Property<string>("Country")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.Property<DateOnly>("EndDate")
+                        .HasColumnType("date");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(150)
+                        .HasColumnType("nvarchar(150)");
+
+                    b.Property<byte[]>("RowVersion")
+                        .IsConcurrencyToken()
+                        .IsRequired()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("rowversion");
+
+                    b.Property<DateOnly>("StartDate")
+                        .HasColumnType("date");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("Tournaments", (string)null);
                 });
 
             modelBuilder.Entity("Warehouse.Domain.Entities.Warehouse", b =>
@@ -493,6 +650,36 @@ namespace Warehouse.Infrastructure.Persistence.Migrations
                         .IsRequired();
                 });
 
+            modelBuilder.Entity("Warehouse.Domain.Entities.RiderTournament", b =>
+                {
+                    b.HasOne("Warehouse.Domain.Entities.Rider", "Rider")
+                        .WithMany("Tournaments")
+                        .HasForeignKey("RiderId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("Warehouse.Domain.Entities.Tournament", "Tournament")
+                        .WithMany("Riders")
+                        .HasForeignKey("TournamentId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Rider");
+
+                    b.Navigation("Tournament");
+                });
+
+            modelBuilder.Entity("Warehouse.Domain.Entities.RiderTournamentHorse", b =>
+                {
+                    b.HasOne("Warehouse.Domain.Entities.RiderTournament", "Participation")
+                        .WithMany("Horses")
+                        .HasForeignKey("RiderId", "TournamentId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Participation");
+                });
+
             modelBuilder.Entity("Warehouse.Domain.Entities.StockTransaction", b =>
                 {
                     b.HasOne("Warehouse.Infrastructure.Identity.ApplicationUser", null)
@@ -561,6 +748,21 @@ namespace Warehouse.Infrastructure.Persistence.Migrations
                     b.Navigation("Stocks");
 
                     b.Navigation("Transactions");
+                });
+
+            modelBuilder.Entity("Warehouse.Domain.Entities.Rider", b =>
+                {
+                    b.Navigation("Tournaments");
+                });
+
+            modelBuilder.Entity("Warehouse.Domain.Entities.RiderTournament", b =>
+                {
+                    b.Navigation("Horses");
+                });
+
+            modelBuilder.Entity("Warehouse.Domain.Entities.Tournament", b =>
+                {
+                    b.Navigation("Riders");
                 });
 
             modelBuilder.Entity("Warehouse.Domain.Entities.Warehouse", b =>

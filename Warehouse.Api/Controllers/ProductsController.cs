@@ -1,7 +1,13 @@
-﻿using Microsoft.AspNetCore.Authorization;
+﻿using MediatR;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
-using Warehouse.Application.Abstractions;
 using Warehouse.Application.DTOs;
+using Warehouse.Application.Features.Products.CreateProduct;
+using Warehouse.Application.Features.Products.DeleteProduct;
+using Warehouse.Application.Features.Products.GetProductById;
+using Warehouse.Application.Features.Products.GetProducts;
+using Warehouse.Application.Features.Products.GetProductTransactions;
+using Warehouse.Application.Features.Products.UpdateProduct;
 
 namespace Warehouse.Api.Controllers;
 
@@ -9,34 +15,50 @@ namespace Warehouse.Api.Controllers;
 [Route("api/products")]
 public sealed class ProductsController : ControllerBase
 {
-    private readonly IInventoryService _inventory;
+    private readonly ISender _sender;
 
-    public ProductsController(IInventoryService inventory)
+    public ProductsController(ISender sender)
     {
-        _inventory = inventory;
+        _sender = sender;
     }
 
     [HttpGet]
     [Authorize(Policy = "Permission:Products.View")]
-    public async Task<IActionResult> GetAll(CancellationToken ct)
+    public async Task<ActionResult<IReadOnlyList<ProductResponse>>> GetAll(
+        CancellationToken ct)
     {
-        return Ok(await _inventory.GetProductsAsync(ct));
+        var result = await _sender.Send(
+            new GetProductsQuery(),
+            ct);
+
+        return Ok(result);
     }
 
     [HttpGet("{id:int}")]
     [Authorize(Policy = "Permission:Products.View")]
-    public async Task<IActionResult> GetById(int id, CancellationToken ct)
+    public async Task<ActionResult<ProductResponse>> GetById(
+        int id,
+        CancellationToken ct)
     {
-        return Ok(await _inventory.GetProductAsync(id, ct));
+        var result = await _sender.Send(
+            new GetProductByIdQuery(id),
+            ct);
+
+        return Ok(result);
     }
 
     [HttpPost]
     [Authorize(Policy = "Permission:Products.Create")]
-    public async Task<IActionResult> Create(
-        ProductRequest request,
+    public async Task<ActionResult<ProductResponse>> Create(
+        [FromBody] ProductRequest request,
         CancellationToken ct)
     {
-        var result = await _inventory.CreateProductAsync(request, ct);
+        var command = new CreateProductCommand(
+            request.Name,
+            request.SKU,
+            request.Description);
+
+        var result = await _sender.Send(command, ct);
 
         return CreatedAtAction(
             nameof(GetById),
@@ -48,27 +70,44 @@ public sealed class ProductsController : ControllerBase
     [Authorize(Policy = "Permission:Products.Edit")]
     public async Task<IActionResult> Update(
         int id,
-        ProductRequest request,
+        [FromBody] ProductRequest request,
         CancellationToken ct)
     {
-        await _inventory.UpdateProductAsync(id, request, ct);
+        var command = new UpdateProductCommand(
+            id,
+            request.Name,
+            request.SKU,
+            request.Description);
+
+        await _sender.Send(command, ct);
+
         return NoContent();
     }
 
     [HttpDelete("{id:int}")]
     [Authorize(Policy = "Permission:Products.Delete")]
-    public async Task<IActionResult> Delete(int id, CancellationToken ct)
+    public async Task<IActionResult> Delete(
+        int id,
+        CancellationToken ct)
     {
-        await _inventory.DeleteProductAsync(id, ct);
+        await _sender.Send(
+            new DeleteProductCommand(id),
+            ct);
+
         return NoContent();
     }
 
     [HttpGet("{id:int}/transactions")]
     [Authorize(Policy = "Permission:Transactions.View")]
-    public async Task<IActionResult> GetTransactions(
-        int id,
-        CancellationToken ct)
+    public async Task<ActionResult<IReadOnlyList<StockTransactionResponse>>>
+        GetTransactions(
+            int id,
+            CancellationToken ct)
     {
-        return Ok(await _inventory.GetTransactionsAsync(null, id, ct));
+        var result = await _sender.Send(
+            new GetProductTransactionsQuery(id),
+            ct);
+
+        return Ok(result);
     }
 }

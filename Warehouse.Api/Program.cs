@@ -1,4 +1,4 @@
-using System.Text;
+﻿using System.Text;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.IdentityModel.Tokens;
@@ -14,11 +14,11 @@ using Warehouse.Infrastructure.Seeding;
 
 namespace Warehouse.Api;
 
-public class Program
+public partial class Program
 {
     public static async Task Main(string[] args)
     {
-        // Captures errors that happen before the full logger is configured.
+        // Logger مبدئي لتسجيل أخطاء بدء التشغيل.
         Log.Logger = new LoggerConfiguration()
             .MinimumLevel.Information()
             .WriteTo.Console()
@@ -28,7 +28,7 @@ public class Program
         {
             var builder = WebApplication.CreateBuilder(args);
 
-            // Serilog: configuration, DI enrichers and configured sinks.
+            // Serilog: قراءة الإعدادات من appsettings.
             builder.Services.AddSerilog((services, configuration) =>
             {
                 configuration
@@ -39,19 +39,22 @@ public class Program
                         builder.Environment.EnvironmentName);
             });
 
-            // Controllers and global error handling.
+            // Controllers ومعالجة الأخطاء.
             builder.Services.AddControllers();
-
             builder.Services.AddProblemDetails();
             builder.Services.AddExceptionHandler<ApiExceptionHandler>();
 
-            // Application services and existing FluentValidation registration.
+            // تسجيل خدمات Application.
             builder.Services.AddApplication();
 
-            // Database, Identity, repositories and seeder.
+            // تسجيل Database وIdentity وخدمات Infrastructure.
             builder.Services.AddInfrastructure(builder.Configuration);
 
-            // JWT settings.
+            // لا نسجل StockAvailabilityService هنا:
+            // مثال الاختبارات يحتاج تسجيله مع IStockReader
+            // داخل إعدادات الاختبار.
+
+            // قراءة إعدادات JWT والتحقق منها.
             var jwt = builder.Configuration
                 .GetSection("Jwt")
                 .Get<JwtSettings>()
@@ -67,7 +70,7 @@ public class Program
                 throw new InvalidOperationException(
                     "Invalid JWT settings. Configure issuer, audience, " +
                     "a secret of at least 32 bytes, and expiration " +
-                    "of 1�120 minutes.");
+                    "of 1–120 minutes.");
             }
 
             builder.Services.AddSingleton(jwt);
@@ -76,7 +79,7 @@ public class Program
                 ITokenService,
                 JwtTokenService>();
 
-            // JWT authentication.
+            // Authentication باستخدام JWT Bearer.
             builder.Services
                 .AddAuthentication(
                     JwtBearerDefaults.AuthenticationScheme)
@@ -107,12 +110,12 @@ public class Program
                             ],
 
                             NameClaimType = "name",
-
                             ClockSkew = TimeSpan.FromSeconds(30)
                         };
 
                     options.Events = new JwtBearerEvents
                     {
+                        // التأكد إن المستخدم ما زال مسموحًا له بالدخول.
                         OnTokenValidated = async context =>
                         {
                             var userId = context.Principal?
@@ -139,6 +142,7 @@ public class Program
                             }
                         },
 
+                        // استجابة موحدة عند عدم وجود Token صالحة.
                         OnChallenge = async context =>
                         {
                             context.HandleResponse();
@@ -155,6 +159,7 @@ public class Program
                                 .ExecuteAsync(context.HttpContext);
                         },
 
+                        // استجابة موحدة عند عدم وجود الصلاحية المطلوبة.
                         OnForbidden = async context =>
                         {
                             await Results.Problem(
@@ -168,7 +173,8 @@ public class Program
                     };
                 });
 
-            // Authentication is required unless [AllowAnonymous] is applied.
+            // كل Endpoint تتطلب مستخدمًا مسجلًا،
+            // إلا لو عليها [AllowAnonymous].
             builder.Services.AddAuthorization(options =>
             {
                 options.FallbackPolicy =
@@ -177,7 +183,7 @@ public class Program
                         .Build();
             });
 
-            // Dynamic permission policies.
+            // Dynamic permission authorization.
             builder.Services.AddSingleton<
                 IAuthorizationPolicyProvider,
                 PermissionPolicyProvider>();
@@ -220,8 +226,7 @@ public class Program
                             {
                                 Reference = new OpenApiReference
                                 {
-                                    Type =
-                                        ReferenceType.SecurityScheme,
+                                    Type = ReferenceType.SecurityScheme,
                                     Id = "Bearer"
                                 }
                             },
@@ -232,9 +237,7 @@ public class Program
 
             var app = builder.Build();
 
-            // One structured completion event for each HTTP request.
-            // Runs outside the exception handler so handled errors
-            // are recorded with their resulting response status.
+            // تسجيل نتيجة كل HTTP Request.
             app.UseSerilogRequestLogging(options =>
             {
                 options.MessageTemplate =
@@ -250,10 +253,10 @@ public class Program
                     };
             });
 
-            // Existing global exception handling.
+            // معالجة الأخطاء باستخدام ApiExceptionHandler.
             app.UseExceptionHandler();
 
-            // Development-only seeding and Swagger.
+            // Seeding وSwagger في Development فقط.
             if (app.Environment.IsDevelopment())
             {
                 if (app.Configuration.GetValue<bool>("Seed:Enabled"))
@@ -291,6 +294,7 @@ public class Program
 
             app.UseHttpsRedirection();
 
+            // ترتيب Authentication قبل Authorization ضروري.
             app.UseAuthentication();
             app.UseAuthorization();
 
@@ -309,7 +313,6 @@ public class Program
                 exception,
                 "Warehouse API terminated unexpectedly");
 
-            // Preserve the failure exit status for tooling and hosting.
             throw;
         }
         finally
