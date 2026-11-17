@@ -1,51 +1,93 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
-
-using System.ComponentModel.DataAnnotations;
+﻿using System.ComponentModel.DataAnnotations;
+using System.Text.Json.Serialization;
 using Warehouse.Domain.Entities;
 
 namespace Warehouse.Application.DTOs;
 
-public sealed class RiderRequest
+#region Shared Editable Profile
+
+public class RiderProfileRequest
 {
-    [Required, StringLength(150)]
+    [Required(ErrorMessage = "Please enter the full name.")]
+    [StringLength(
+        25,
+        MinimumLength = 3,
+        ErrorMessage = "Full name must be between 3 and 25 characters.")]
+    [RegularExpression(
+        @"^[\p{L}\p{M}]+(?: [\p{L}\p{M}]+)*$",
+        ErrorMessage = "Full name can contain letters and spaces only.")]
     public string FullName { get; set; } = string.Empty;
 
-    [Required, StringLength(100)]
+    [Required(ErrorMessage = "Please select the nationality.")]
+    [CountryCode]
     public string Nationality { get; set; } = string.Empty;
+    [Required(ErrorMessage = "Please select the city.")]
+    [Range(1, int.MaxValue, ErrorMessage = "Please select a valid city.")]
+    public int? CityId { get; set; }
 
-    [Required, EmailAddress, StringLength(256)]
-    public string Email { get; set; } = string.Empty;
+    // Nullable is necessary:
+    // missing Handicap must not become the valid value 0.
+    [Required(ErrorMessage = "Please select the handicap.")]
+    [Range(
+        -2,
+        10,
+        ErrorMessage = "Handicap number must be between -2 and 10.")]
+    public int? HandicapLevel { get; set; }
 
-    [Phone, StringLength(30)]
-    public string? PhoneNumber { get; set; }
-
-    [Range(-2, 10)]
-    public int HandicapLevel { get; set; }
-
-    [StringLength(150)]
+    [StringLength(
+        25,
+        ErrorMessage = "Polo Team must be 25 characters or fewer.")]
     public string? PoloTeam { get; set; }
 
-    [Url, StringLength(2048)]
+    // Temporary: accepts a URL until the photo-upload phase.
+    [Url(ErrorMessage = "Please enter a valid photo URL.")]
+    [StringLength(2048)]
     public string? ImageUrl { get; set; }
-
-    // Required for updates; omitted when creating.
-    public Guid? Version { get; set; }
 }
 
-// Use SQL rowversion as a Base64 string instead of Guid.
-// This separate request carries the concurrency token for PUT.
+#endregion
+
+#region Create Rider
+
+public sealed class RiderRequest : RiderProfileRequest
+{
+    [Required(ErrorMessage = "Please enter the email.")]
+    [EmailAddress(ErrorMessage = "Please enter a valid email address.")]
+    [StringLength(256)]
+    public string Email { get; set; } = string.Empty;
+
+    // Complete international number, for example +201001234567.
+    // The frontend combines the selected country code with local digits.
+    [RegularExpression(
+        @"^\+[1-9][0-9]{7,14}$",
+        ErrorMessage = "Please enter a valid international phone number.")]
+    public string? PhoneNumber { get; set; }
+}
+
+#endregion
+
+#region Update Rider
+
+// Reject unknown fields such as Email and PhoneNumber,
+// instead of silently ignoring attempted changes.
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+public sealed class UpdateRiderProfileRequest : RiderProfileRequest
+{
+}
+
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed class UpdateRiderRequest
 {
     [Required]
-    public RiderRequest Profile { get; set; } = new();
+    public UpdateRiderProfileRequest Profile { get; set; } = new();
 
     [Required]
     public string RowVersion { get; set; } = string.Empty;
 }
+
+#endregion
+
+#region Tournament Requests
 
 public sealed class TournamentRequest
 {
@@ -72,6 +114,10 @@ public sealed class UpdateTournamentRequest
     public string RowVersion { get; set; } = string.Empty;
 }
 
+#endregion
+
+#region Availability
+
 public sealed class AvailabilityRequest
 {
     public bool IsAvailable { get; set; }
@@ -79,6 +125,10 @@ public sealed class AvailabilityRequest
     [Required]
     public string RowVersion { get; set; } = string.Empty;
 }
+
+#endregion
+
+#region Participation Requests
 
 public sealed class ParticipationRequest
 {
@@ -104,10 +154,19 @@ public sealed class ParticipationStatusRequest
     public string RowVersion { get; set; } = string.Empty;
 }
 
+#endregion
+
+#region Responses
+
 public sealed record RiderResponse(
     int Id,
     string FullName,
     string Nationality,
+    int? CountryId,
+    string? CountryCode,
+    string? CountryName,
+    int? CityId,
+    string? CityName,
     string Email,
     string? PhoneNumber,
     int HandicapLevel,
@@ -146,3 +205,5 @@ public sealed record PageResponse<T>(
     int TotalCount,
     int Page,
     int PageSize);
+
+#endregion

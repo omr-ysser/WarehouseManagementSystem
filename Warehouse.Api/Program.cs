@@ -1,6 +1,8 @@
 ﻿using System.Text;
+using System.Threading.RateLimiting;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
 using Serilog;
@@ -10,25 +12,39 @@ using Warehouse.Api.Middleware;
 using Warehouse.Application;
 using Warehouse.Application.Abstractions;
 using Warehouse.Infrastructure;
+using Warehouse.Infrastructure.Persistence;
 using Warehouse.Infrastructure.Seeding;
 
 namespace Warehouse.Api;
 
 public partial class Program
 {
+    private const string DisabledAccountMessage =
+        "Your account has been disabled. Please contact support.";
+
+    private const string CustomerPasswordRateLimitPolicy =
+        "customer-password";
+
+    // Set only after validating the JWT and checking the database.
+    private static readonly object DisabledAccountKey = new();
+
     public static async Task Main(string[] args)
     {
-        // Logger مبدئي لتسجيل أخطاء بدء التشغيل.
+        #region Bootstrap Logger
+
         Log.Logger = new LoggerConfiguration()
             .MinimumLevel.Information()
             .WriteTo.Console()
             .CreateBootstrapLogger();
 
+        #endregion
+
         try
         {
             var builder = WebApplication.CreateBuilder(args);
 
-            // Serilog: قراءة الإعدادات من appsettings.
+            #region Serilog
+
             builder.Services.AddSerilog((services, configuration) =>
             {
                 configuration
@@ -39,22 +55,93 @@ public partial class Program
                         builder.Environment.EnvironmentName);
             });
 
-            // Controllers ومعالجة الأخطاء.
+            #endregion
+
+            #region Controllers And Error Handling
+
             builder.Services.AddControllers();
+
             builder.Services.AddProblemDetails();
+
             builder.Services.AddExceptionHandler<ApiExceptionHandler>();
 
-            // تسجيل خدمات Application.
+            #endregion
+
+            #region Application And Infrastructure
+
             builder.Services.AddApplication();
 
-            // تسجيل Database وIdentity وخدمات Infrastructure.
             builder.Services.AddInfrastructure(builder.Configuration);
 
-            // لا نسجل StockAvailabilityService هنا:
-            // مثال الاختبارات يحتاج تسجيله مع IStockReader
-            // داخل إعدادات الاختبار.
+            // Registers password invitation services, SMTP worker,
+            // token lifetime and persistent Data Protection keys.
+            builder.Services.AddCustomerPasswords(
+                builder.Configuration);
 
-            // قراءة إعدادات JWT والتحقق منها.
+            builder.Services.AddHttpContextAccessor();
+
+            #endregion
+
+            #region Rate Limiting
+
+            builder.Services.AddRateLimiter(options =>
+            {
+                options.RejectionStatusCode =
+                    StatusCodes.Status429TooManyRequests;
+
+                options.AddPolicy(
+                    CustomerPasswordRateLimitPolicy,
+                    context =>
+                        RateLimitPartition.GetFixedWindowLimiter(
+                            partitionKey:
+                                context.Connection.RemoteIpAddress?
+                                    .ToString()
+                                ?? "unknown",
+                            factory: _ =>
+                                new FixedWindowRateLimiterOptions
+                                {
+                                    PermitLimit = 10,
+                                    Window = TimeSpan.FromMinutes(1),
+                                    QueueLimit = 0,
+                                    AutoReplenishment = true
+                                }));
+
+                options.OnRejected = async (context, cancellationToken) =>
+                {
+                    if (context.HttpContext.Response.HasStarted)
+                    {
+                        return;
+                    }
+
+                    if (context.Lease.TryGetMetadata(
+                            MetadataName.RetryAfter,
+                            out var retryAfter))
+                    {
+                        context.HttpContext.Response.Headers[
+                            "Retry-After"] =
+                            Math.Max(
+                                    1,
+                                    (int)Math.Ceiling(
+                                        retryAfter.TotalSeconds))
+                                .ToString(
+                                    System.Globalization
+                                        .CultureInfo.InvariantCulture);
+                    }
+
+                    await Results.Problem(
+                            statusCode:
+                                StatusCodes.Status429TooManyRequests,
+                            title: "Too many requests",
+                            detail:
+                                "Too many attempts. Please try again later.")
+                        .ExecuteAsync(context.HttpContext);
+                };
+            });
+
+            #endregion
+
+            #region JWT Configuration
+
             var jwt = builder.Configuration
                 .GetSection("Jwt")
                 .Get<JwtSettings>()
@@ -79,7 +166,10 @@ public partial class Program
                 ITokenService,
                 JwtTokenService>();
 
-            // Authentication باستخدام JWT Bearer.
+            #endregion
+
+            #region Authentication
+
             builder.Services
                 .AddAuthentication(
                     JwtBearerDefaults.AuthenticationScheme)
@@ -110,12 +200,12 @@ public partial class Program
                             ],
 
                             NameClaimType = "name",
+
                             ClockSkew = TimeSpan.FromSeconds(30)
                         };
 
                     options.Events = new JwtBearerEvents
                     {
-                        // التأكد إن المستخدم ما زال مسموحًا له بالدخول.
                         OnTokenValidated = async context =>
                         {
                             var userId = context.Principal?
@@ -127,14 +217,42 @@ public partial class Program
                                 return;
                             }
 
-                            var identity = context.HttpContext
-                                .RequestServices
+                            var services = context.HttpContext
+                                .RequestServices;
+
+                            var cancellationToken = context.HttpContext
+                                .RequestAborted;
+
+                            var dbContext = services
+                                .GetRequiredService<ApplicationDbContext>();
+
+                            // Read the current customer status on every
+                            // authenticated request.
+                            var isDisabledRider = await dbContext.Riders
+                                .AsNoTracking()
+                                .AnyAsync(
+                                    rider =>
+                                        rider.AccountId == userId &&
+                                        !rider.IsAvailable,
+                                    cancellationToken);
+
+                            if (isDisabledRider)
+                            {
+                                context.HttpContext.Items[
+                                    DisabledAccountKey] = true;
+
+                                context.Fail(DisabledAccountMessage);
+                                return;
+                            }
+
+                            // Preserve the existing Identity checks.
+                            var identity = services
                                 .GetRequiredService<IIdentityService>();
 
                             var isAllowed =
                                 await identity.IsUserAllowedAsync(
                                     userId,
-                                    context.HttpContext.RequestAborted);
+                                    cancellationToken);
 
                             if (!isAllowed)
                             {
@@ -142,39 +260,56 @@ public partial class Program
                             }
                         },
 
-                        // استجابة موحدة عند عدم وجود Token صالحة.
                         OnChallenge = async context =>
                         {
                             context.HandleResponse();
 
+                            if (context.Response.HasStarted)
+                            {
+                                return;
+                            }
+
                             context.Response.Headers[
                                 "WWW-Authenticate"] = "Bearer";
 
+                            var isDisabledAccount =
+                                context.HttpContext.Items.ContainsKey(
+                                    DisabledAccountKey);
+
+                            var detail = isDisabledAccount
+                                ? DisabledAccountMessage
+                                : "A valid access token is required.";
+
                             await Results.Problem(
-                                statusCode:
-                                    StatusCodes.Status401Unauthorized,
-                                title: "Unauthorized",
-                                detail:
-                                    "A valid access token is required.")
+                                    statusCode:
+                                        StatusCodes.Status401Unauthorized,
+                                    title: "Unauthorized",
+                                    detail: detail)
                                 .ExecuteAsync(context.HttpContext);
                         },
 
-                        // استجابة موحدة عند عدم وجود الصلاحية المطلوبة.
                         OnForbidden = async context =>
                         {
+                            if (context.Response.HasStarted)
+                            {
+                                return;
+                            }
+
                             await Results.Problem(
-                                statusCode:
-                                    StatusCodes.Status403Forbidden,
-                                title: "Forbidden",
-                                detail:
-                                    "You do not have the required permission.")
+                                    statusCode:
+                                        StatusCodes.Status403Forbidden,
+                                    title: "Forbidden",
+                                    detail:
+                                        "You do not have the required permission.")
                                 .ExecuteAsync(context.HttpContext);
                         }
                     };
                 });
 
-            // كل Endpoint تتطلب مستخدمًا مسجلًا،
-            // إلا لو عليها [AllowAnonymous].
+            #endregion
+
+            #region Authorization
+
             builder.Services.AddAuthorization(options =>
             {
                 options.FallbackPolicy =
@@ -183,7 +318,6 @@ public partial class Program
                         .Build();
             });
 
-            // Dynamic permission authorization.
             builder.Services.AddSingleton<
                 IAuthorizationPolicyProvider,
                 PermissionPolicyProvider>();
@@ -192,9 +326,10 @@ public partial class Program
                 IAuthorizationHandler,
                 PermissionAuthorizationHandler>();
 
-            builder.Services.AddHttpContextAccessor();
+            #endregion
 
-            // Swagger.
+            #region Swagger
+
             builder.Services.AddEndpointsApiExplorer();
 
             builder.Services.AddSwaggerGen(options =>
@@ -204,8 +339,9 @@ public partial class Program
                     Title = "Warehouse Management API",
                     Version = "v1",
                     Description =
-                        "Warehouse and stock management with JWT " +
-                        "and dynamic permission-based authorization."
+                        "Warehouse and customer management with JWT, " +
+                        "dynamic permission-based authorization " +
+                        "and customer password invitations."
                 });
 
                 options.AddSecurityDefinition(
@@ -235,9 +371,12 @@ public partial class Program
                     });
             });
 
+            #endregion
+
             var app = builder.Build();
 
-            // تسجيل نتيجة كل HTTP Request.
+            #region Request Logging
+
             app.UseSerilogRequestLogging(options =>
             {
                 options.MessageTemplate =
@@ -253,10 +392,16 @@ public partial class Program
                     };
             });
 
-            // معالجة الأخطاء باستخدام ApiExceptionHandler.
+            #endregion
+
+            #region Exception Handling
+
             app.UseExceptionHandler();
 
-            // Seeding وSwagger في Development فقط.
+            #endregion
+
+            #region Development Seeding And Swagger
+
             if (app.Environment.IsDevelopment())
             {
                 if (app.Configuration.GetValue<bool>("Seed:Enabled"))
@@ -289,16 +434,28 @@ public partial class Program
                 }
 
                 app.UseSwagger();
+
                 app.UseSwaggerUI();
             }
 
+            #endregion
+
+            #region HTTP Pipeline
+
             app.UseHttpsRedirection();
 
-            // ترتيب Authentication قبل Authorization ضروري.
+            // Endpoint-specific rate limiting requires routing first.
+            app.UseRouting();
+
             app.UseAuthentication();
+
             app.UseAuthorization();
 
+            app.UseRateLimiter();
+
             app.MapControllers();
+
+            #endregion
 
             app.Logger.LogInformation(
                 "Starting {Application} in {Environment}",
@@ -308,6 +465,7 @@ public partial class Program
             await app.RunAsync();
         }
         catch (Exception exception)
+            when (exception is not HostAbortedException)
         {
             Log.Fatal(
                 exception,

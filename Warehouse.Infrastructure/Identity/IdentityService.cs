@@ -1,10 +1,9 @@
 ﻿using System;
 using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
-
 using System.Data;
+using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using Warehouse.Application.Abstractions;
@@ -30,6 +29,8 @@ public sealed class IdentityService : IIdentityService
         _users = users;
         _roles = roles;
     }
+
+    #region Helpers
 
     private static string Clean(
         string value,
@@ -58,15 +59,19 @@ public sealed class IdentityService : IIdentityService
 
         var errors = result.Errors.ToArray();
 
-        var status = errors.Any(x =>
-            x.Code.StartsWith("Duplicate", StringComparison.Ordinal) ||
-            x.Code == "ConcurrencyFailure")
+        var status = errors.Any(error =>
+            error.Code.StartsWith(
+                "Duplicate",
+                StringComparison.Ordinal) ||
+            error.Code == "ConcurrencyFailure")
             ? 409
             : 400;
 
         throw new AppException(
             status,
-            string.Join(" ", errors.Select(x => x.Description)));
+            string.Join(
+                " ",
+                errors.Select(error => error.Description)));
     }
 
     private async Task<ApplicationUser> RequireUserAsync(string id)
@@ -80,6 +85,10 @@ public sealed class IdentityService : IIdentityService
         return await _roles.FindByIdAsync(id)
             ?? throw new AppException(404, "Role not found.");
     }
+
+    #endregion
+
+    #region Authentication
 
     public async Task<bool> IsUserAllowedAsync(
         string userId,
@@ -110,16 +119,22 @@ public sealed class IdentityService : IIdentityService
         if (!await _users.CheckPasswordAsync(user, password))
         {
             EnsureSuccess(await _users.AccessFailedAsync(user));
+
             return null;
         }
 
-        EnsureSuccess(await _users.ResetAccessFailedCountAsync(user));
+        EnsureSuccess(
+            await _users.ResetAccessFailedCountAsync(user));
 
         return new AuthenticatedUser(
             user.Id,
             user.FullName,
             user.Email!);
     }
+
+    #endregion
+
+    #region Authorization And Current User
 
     public async Task<bool> HasPermissionAsync(
         string userId,
@@ -144,7 +159,9 @@ public sealed class IdentityService : IIdentityService
         string userId,
         CancellationToken cancellationToken)
     {
-        var user = await GetUserAsync(userId, cancellationToken);
+        var user = await GetUserAsync(
+            userId,
+            cancellationToken);
 
         var permissions = await (
             from userRole in _db.UserRoles
@@ -156,30 +173,33 @@ public sealed class IdentityService : IIdentityService
             select definition.Key
         )
         .Distinct()
-        .OrderBy(x => x)
+        .OrderBy(key => key)
         .ToListAsync(cancellationToken);
 
         return new CurrentUserResponse(user, permissions);
     }
 
-    // Roles
+    #endregion
+
+    #region Roles
 
     public async Task<IReadOnlyList<RoleResponse>> GetRolesAsync(
         CancellationToken cancellationToken)
     {
         var roles = await _db.Roles
             .AsNoTracking()
-            .Include(x => x.RolePermissions)
-            .OrderBy(x => x.Name)
+            .Include(role => role.RolePermissions)
+            .OrderBy(role => role.Name)
             .ToListAsync(cancellationToken);
 
-        return roles.Select(x => new RoleResponse(
-            x.Id,
-            x.Name!,
-            x.RolePermissions
-                .Select(p => p.PermissionId)
-                .OrderBy(id => id)
-                .ToArray()))
+        return roles
+            .Select(role => new RoleResponse(
+                role.Id,
+                role.Name!,
+                role.RolePermissions
+                    .Select(permission => permission.PermissionId)
+                    .OrderBy(id => id)
+                    .ToArray()))
             .ToArray();
     }
 
@@ -191,7 +211,11 @@ public sealed class IdentityService : IIdentityService
 
         var role = new ApplicationRole
         {
-            Name = Clean(request.Name, 2, 50, "Role name")
+            Name = Clean(
+                request.Name,
+                2,
+                50,
+                "Role name")
         };
 
         EnsureSuccess(await _roles.CreateAsync(role));
@@ -211,7 +235,11 @@ public sealed class IdentityService : IIdentityService
 
         var role = await RequireRoleAsync(id);
 
-        role.Name = Clean(request.Name, 2, 50, "Role name");
+        role.Name = Clean(
+            request.Name,
+            2,
+            50,
+            "Role name");
 
         EnsureSuccess(await _roles.UpdateAsync(role));
     }
@@ -221,15 +249,19 @@ public sealed class IdentityService : IIdentityService
         SetRolePermissionsRequest request,
         CancellationToken cancellationToken)
     {
-        if (request.PermissionIds.Any(x => x <= 0))
+        if (request.PermissionIds.Any(id => id <= 0))
         {
-            throw new AppException(400, "Permission IDs must be positive.");
+            throw new AppException(
+                400,
+                "Permission IDs must be positive.");
         }
 
         if (request.PermissionIds.Distinct().Count()
             != request.PermissionIds.Length)
         {
-            throw new AppException(400, "Duplicate permission IDs.");
+            throw new AppException(
+                400,
+                "Duplicate permission IDs.");
         }
 
         await using var transaction =
@@ -242,7 +274,9 @@ public sealed class IdentityService : IIdentityService
         var ids = request.PermissionIds;
 
         var existingCount = await _db.Permissions
-            .CountAsync(x => ids.Contains(x.Id), cancellationToken);
+            .CountAsync(
+                permission => ids.Contains(permission.Id),
+                cancellationToken);
 
         if (existingCount != ids.Length)
         {
@@ -252,17 +286,18 @@ public sealed class IdentityService : IIdentityService
         }
 
         var current = await _db.RolePermissions
-            .Where(x => x.RoleId == roleId)
+            .Where(permission => permission.RoleId == roleId)
             .ToListAsync(cancellationToken);
 
         _db.RolePermissions.RemoveRange(
-            current.Where(x => !ids.Contains(x.PermissionId)));
+            current.Where(
+                permission => !ids.Contains(permission.PermissionId)));
 
         var currentIds = current
-            .Select(x => x.PermissionId)
+            .Select(permission => permission.PermissionId)
             .ToHashSet();
 
-        foreach (var id in ids.Where(x => !currentIds.Contains(x)))
+        foreach (var id in ids.Where(id => !currentIds.Contains(id)))
         {
             _db.RolePermissions.Add(new RolePermission
             {
@@ -275,18 +310,20 @@ public sealed class IdentityService : IIdentityService
         await transaction.CommitAsync(cancellationToken);
     }
 
-    // Permissions
+    #endregion
+
+    #region Permissions
 
     public async Task<IReadOnlyList<PermissionResponse>>
         GetPermissionsAsync(CancellationToken cancellationToken)
     {
         return await _db.Permissions
             .AsNoTracking()
-            .OrderBy(x => x.Key)
-            .Select(x => new PermissionResponse(
-                x.Id,
-                x.Key,
-                x.DisplayName))
+            .OrderBy(permission => permission.Key)
+            .Select(permission => new PermissionResponse(
+                permission.Id,
+                permission.Key,
+                permission.DisplayName))
             .ToListAsync(cancellationToken);
     }
 
@@ -294,14 +331,21 @@ public sealed class IdentityService : IIdentityService
         CreatePermissionRequest request,
         CancellationToken cancellationToken)
     {
-        var key = Clean(request.Key, 3, 100, "Permission key");
+        var key = Clean(
+            request.Key,
+            3,
+            100,
+            "Permission key");
+
         var normalized = key.ToUpperInvariant();
 
         if (await _db.Permissions.AnyAsync(
-            x => x.NormalizedKey == normalized,
+            permission => permission.NormalizedKey == normalized,
             cancellationToken))
         {
-            throw new AppException(409, "Permission already exists.");
+            throw new AppException(
+                409,
+                "Permission already exists.");
         }
 
         var permission = new Permission
@@ -309,10 +353,14 @@ public sealed class IdentityService : IIdentityService
             Key = key,
             NormalizedKey = normalized,
             DisplayName = Clean(
-                request.DisplayName, 2, 100, "Display name")
+                request.DisplayName,
+                2,
+                100,
+                "Display name")
         };
 
         _db.Permissions.Add(permission);
+
         await _db.SaveChangesAsync(cancellationToken);
 
         return new PermissionResponse(
@@ -327,11 +375,18 @@ public sealed class IdentityService : IIdentityService
         CancellationToken cancellationToken)
     {
         var permission = await _db.Permissions
-            .SingleOrDefaultAsync(x => x.Id == id, cancellationToken)
-            ?? throw new AppException(404, "Permission not found.");
+            .SingleOrDefaultAsync(
+                permission => permission.Id == id,
+                cancellationToken)
+            ?? throw new AppException(
+                404,
+                "Permission not found.");
 
         permission.DisplayName = Clean(
-            request.DisplayName, 2, 100, "Display name");
+            request.DisplayName,
+            2,
+            100,
+            "Display name");
 
         await _db.SaveChangesAsync(cancellationToken);
     }
@@ -341,8 +396,12 @@ public sealed class IdentityService : IIdentityService
         CancellationToken cancellationToken)
     {
         var permission = await _db.Permissions
-            .SingleOrDefaultAsync(x => x.Id == id, cancellationToken)
-            ?? throw new AppException(404, "Permission not found.");
+            .SingleOrDefaultAsync(
+                permission => permission.Id == id,
+                cancellationToken)
+            ?? throw new AppException(
+                404,
+                "Permission not found.");
 
         if (PermissionCatalog.IsBuiltIn(permission.Key))
         {
@@ -352,7 +411,8 @@ public sealed class IdentityService : IIdentityService
         }
 
         if (await _db.RolePermissions.AnyAsync(
-            x => x.PermissionId == id, cancellationToken))
+            rolePermission => rolePermission.PermissionId == id,
+            cancellationToken))
         {
             throw new AppException(
                 409,
@@ -360,10 +420,13 @@ public sealed class IdentityService : IIdentityService
         }
 
         _db.Permissions.Remove(permission);
+
         await _db.SaveChangesAsync(cancellationToken);
     }
 
-    // Users
+    #endregion
+
+    #region Users
 
     public async Task<IReadOnlyList<UserResponse>> GetUsersAsync(
         string? roleId,
@@ -392,11 +455,11 @@ public sealed class IdentityService : IIdentityService
 
         if (roleId is not null)
         {
-            query = query.Where(x => x.RoleId == roleId);
+            query = query.Where(user => user.RoleId == roleId);
         }
 
         return await query
-            .OrderBy(x => x.FullName)
+            .OrderBy(user => user.FullName)
             .ToListAsync(cancellationToken);
     }
 
@@ -414,7 +477,9 @@ public sealed class IdentityService : IIdentityService
                 on assignment.RoleId equals item.Id
             where assignment.UserId == id
             select item
-        ).AsNoTracking().SingleOrDefaultAsync(cancellationToken);
+        )
+        .AsNoTracking()
+        .SingleOrDefaultAsync(cancellationToken);
 
         return new UserResponse(
             user.Id,
@@ -440,16 +505,23 @@ public sealed class IdentityService : IIdentityService
 
         var user = new ApplicationUser
         {
-            FullName = Clean(request.FullName, 2, 100, "Full name"),
+            FullName = Clean(
+                request.FullName,
+                2,
+                100,
+                "Full name"),
+
             Email = email,
             UserName = email,
             PhoneNumber = request.PhoneNumber.Trim(),
             LockoutEnabled = true
         };
 
-        EnsureSuccess(await _users.CreateAsync(user, request.Password));
+        EnsureSuccess(
+            await _users.CreateAsync(user, request.Password));
 
-        EnsureSuccess(await _users.AddToRoleAsync(user, role.Name!));
+        EnsureSuccess(
+            await _users.AddToRoleAsync(user, role.Name!));
 
         await transaction.CommitAsync(cancellationToken);
 
@@ -471,7 +543,30 @@ public sealed class IdentityService : IIdentityService
 
         var user = await RequireUserAsync(id);
 
-        user.FullName = Clean(request.FullName, 2, 100, "Full name");
+        // Customer profiles must be edited through the Riders flow.
+        // This prevents changing customer email/phone through Users
+        // and avoids updating the account name without its Rider profile.
+        var isLinkedToRider = await _db.Riders
+            .AsNoTracking()
+            .AnyAsync(
+                rider => rider.AccountId == id,
+                cancellationToken);
+
+        if (isLinkedToRider)
+        {
+            throw new AppException(
+                409,
+                "This user is linked to a customer profile. " +
+                "Update the profile through the Riders endpoint. " +
+                "Customer email and phone number cannot be changed.");
+        }
+
+        user.FullName = Clean(
+            request.FullName,
+            2,
+            100,
+            "Full name");
+
         user.Email = request.Email.Trim();
         user.UserName = user.Email;
         user.PhoneNumber = request.PhoneNumber.Trim();
@@ -501,17 +596,23 @@ public sealed class IdentityService : IIdentityService
                 StringComparison.OrdinalIgnoreCase))
         {
             await transaction.CommitAsync(cancellationToken);
+
             return;
         }
 
         if (currentRoles.Count > 0)
         {
             EnsureSuccess(
-                await _users.RemoveFromRolesAsync(user, currentRoles));
+                await _users.RemoveFromRolesAsync(
+                    user,
+                    currentRoles));
         }
 
-        EnsureSuccess(await _users.AddToRoleAsync(user, role.Name!));
+        EnsureSuccess(
+            await _users.AddToRoleAsync(user, role.Name!));
 
         await transaction.CommitAsync(cancellationToken);
     }
+
+    #endregion
 }

@@ -131,6 +131,48 @@ namespace Warehouse.Infrastructure.Persistence.Migrations
                     b.ToTable("AspNetUserTokens", (string)null);
                 });
 
+            modelBuilder.Entity("Warehouse.Domain.Entities.CustomerPasswordEmail", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<long>("Id"));
+
+                    b.Property<string>("AccountId")
+                        .IsRequired()
+                        .HasMaxLength(450)
+                        .HasColumnType("nvarchar(450)");
+
+                    b.Property<int>("Attempts")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<DateTime>("NextAttemptAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<DateTime?>("ProcessedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<int>("RiderId")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime?>("SentAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("AccountId");
+
+                    b.HasIndex("RiderId");
+
+                    b.HasIndex("ProcessedAtUtc", "NextAttemptAtUtc");
+
+                    b.ToTable("CustomerPasswordEmails", (string)null);
+                });
+
             modelBuilder.Entity("Warehouse.Domain.Entities.Product", b =>
                 {
                     b.Property<int>("Id")
@@ -181,6 +223,10 @@ namespace Warehouse.Infrastructure.Persistence.Migrations
 
                     SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("Id"));
 
+                    b.Property<string>("AccountId")
+                        .HasMaxLength(450)
+                        .HasColumnType("nvarchar(450)");
+
                     b.Property<string>("Email")
                         .IsRequired()
                         .HasMaxLength(256)
@@ -229,6 +275,10 @@ namespace Warehouse.Infrastructure.Persistence.Migrations
                         .HasColumnType("rowversion");
 
                     b.HasKey("Id");
+
+                    b.HasIndex("AccountId")
+                        .IsUnique()
+                        .HasFilter("[AccountId] IS NOT NULL");
 
                     b.HasIndex("NormalizedEmail")
                         .IsUnique();
@@ -510,7 +560,6 @@ namespace Warehouse.Infrastructure.Persistence.Migrations
                         .HasColumnType("nvarchar(max)");
 
                     b.Property<string>("PhoneNumber")
-                        .IsRequired()
                         .HasMaxLength(16)
                         .HasColumnType("nvarchar(16)");
 
@@ -648,6 +697,29 @@ namespace Warehouse.Infrastructure.Persistence.Migrations
                         .HasForeignKey("UserId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
+                });
+
+            modelBuilder.Entity("Warehouse.Domain.Entities.CustomerPasswordEmail", b =>
+                {
+                    b.HasOne("Warehouse.Infrastructure.Identity.ApplicationUser", null)
+                        .WithMany()
+                        .HasForeignKey("AccountId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("Warehouse.Domain.Entities.Rider", null)
+                        .WithMany()
+                        .HasForeignKey("RiderId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("Warehouse.Domain.Entities.Rider", b =>
+                {
+                    b.HasOne("Warehouse.Infrastructure.Identity.ApplicationUser", null)
+                        .WithOne()
+                        .HasForeignKey("Warehouse.Domain.Entities.Rider", "AccountId")
+                        .OnDelete(DeleteBehavior.Restrict);
                 });
 
             modelBuilder.Entity("Warehouse.Domain.Entities.RiderTournament", b =>
