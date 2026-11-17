@@ -1,10 +1,4 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
-
-using MediatR;
+﻿using MediatR;
 using Warehouse.Application.DTOs;
 using Warehouse.Domain.Entities;
 
@@ -14,7 +8,10 @@ public sealed record GetRidersQuery(
     string? Search = null,
     bool? Available = null,
     int Page = 1,
-    int PageSize = 20)
+    int PageSize = 20,
+    string[]? Nationalities = null,
+    int? HandicapMin = null,
+    int? HandicapMax = null)
     : IRequest<PageResponse<RiderResponse>>;
 
 public sealed record GetRiderByIdQuery(int Id)

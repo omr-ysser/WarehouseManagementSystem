@@ -12,8 +12,14 @@ namespace Warehouse.Application.Abstractions;
 public interface IRiderService
 {
     Task<PageResponse<RiderResponse>> GetRidersAsync(
-        string? search, bool? available,
-        int page, int pageSize, CancellationToken ct);
+    string? search,
+    bool? available,
+    int page,
+    int pageSize,
+    CancellationToken ct,
+    string[]? nationalities = null,
+    int? handicapMin = null,
+    int? handicapMax = null);
 
     Task<RiderResponse> GetRiderAsync(int id, CancellationToken ct);
 

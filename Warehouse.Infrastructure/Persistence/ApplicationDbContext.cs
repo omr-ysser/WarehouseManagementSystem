@@ -44,7 +44,11 @@ public class ApplicationDbContext
 
     public DbSet<RiderTournamentHorse> RiderTournamentHorses
         => Set<RiderTournamentHorse>();
+    public DbSet<CustomerPasswordEmail> CustomerPasswordEmails
+    => Set<CustomerPasswordEmail>();
+    public DbSet<Country> Countries => Set<Country>();
 
+    public DbSet<City> Cities => Set<City>();
     protected override void OnModelCreating(ModelBuilder builder)
     {
         base.OnModelCreating(builder);
