@@ -1,13 +1,15 @@
-﻿using Microsoft.Data.SqlClient;
+﻿using System.ComponentModel.DataAnnotations;
+using System.Data;
+using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
 using Warehouse.Application.Abstractions;
 using Warehouse.Application.DTOs;
 using Warehouse.Application.Exceptions;
 using Warehouse.Domain.Entities;
 using Warehouse.Infrastructure.Persistence;
-using System.ComponentModel.DataAnnotations;
 
 namespace Warehouse.Infrastructure.Services;
+
 public sealed class RiderService : IRiderService
 {
     private readonly ApplicationDbContext _db;
@@ -24,9 +26,13 @@ public sealed class RiderService : IRiderService
         bool? available,
         int page,
         int pageSize,
-        CancellationToken ct)
+        CancellationToken ct,
+        string[]? nationalities = null,
+        int? handicapMin = null,
+        int? handicapMax = null)
     {
         ValidatePagination(page, pageSize);
+        ValidateHandicapRange(handicapMin, handicapMax);
 
         var query = _db.Riders.AsNoTracking();
 
@@ -34,35 +40,77 @@ public sealed class RiderService : IRiderService
         {
             var term = search.Trim();
 
-            query = query.Where(x =>
-                x.FullName.Contains(term) ||
-                x.Email.Contains(term));
+            query = query.Where(rider =>
+                rider.FullName.Contains(term) ||
+                rider.Email.Contains(term) ||
+                (
+                    rider.PoloTeam != null &&
+                    rider.PoloTeam.Contains(term)
+                ) ||
+                (
+                    rider.PhoneNumber != null &&
+                    rider.PhoneNumber.Contains(term)
+                ));
         }
 
         if (available.HasValue)
         {
             query = query.Where(
-                x => x.IsAvailable == available.Value);
+                rider => rider.IsAvailable == available.Value);
+        }
+
+        if (nationalities is { Length: > 0 })
+        {
+            if (nationalities.Any(
+                nationality => !CustomerCountries.IsValid(nationality)))
+            {
+                throw BadRequest("Please select a valid nationality.");
+            }
+
+            var countryCodes = nationalities
+                .Select(nationality =>
+                    nationality.Trim().ToUpperInvariant())
+                .Distinct()
+                .ToArray();
+
+            query = query.Where(
+                rider => countryCodes.Contains(rider.Nationality));
+        }
+
+        if (handicapMin.HasValue)
+        {
+            query = query.Where(
+                rider => rider.HandicapLevel >= handicapMin.Value);
+        }
+
+        if (handicapMax.HasValue)
+        {
+            query = query.Where(
+                rider => rider.HandicapLevel <= handicapMax.Value);
         }
 
         var totalCount = await query.CountAsync(ct);
 
         var rows = await query
-            .OrderBy(x => x.FullName)
-            .ThenBy(x => x.Id)
+            .OrderByDescending(rider => rider.RegisteredAtUtc)
+            .ThenByDescending(rider => rider.Id)
             .Skip(GetSkip(page, pageSize))
             .Take(pageSize)
-            .Select(x => new
+            .Select(rider => new
             {
-                Rider = x,
-                TournamentCount = x.Tournaments.Count
+                Rider = rider,
+                TournamentCount = rider.Tournaments.Count
             })
             .ToListAsync(ct);
 
+        var items = rows
+            .Select(row => MapRider(
+                row.Rider,
+                row.TournamentCount))
+            .ToArray();
+
         return new PageResponse<RiderResponse>(
-            rows.Select(x => MapRider(
-                x.Rider,
-                x.TournamentCount)).ToArray(),
+            items,
             totalCount,
             page,
             pageSize);
@@ -93,7 +141,19 @@ public sealed class RiderService : IRiderService
     {
         ValidateDto(request);
 
-        var rider = new Rider();
+        // Validate the selected city against the database.
+        await EnsureCityExistsAsync(request.CityId, ct);
+
+        var email = request.Email.Trim();
+
+        var rider = new Rider
+        {
+            Email = email,
+            NormalizedEmail = email.ToUpperInvariant(),
+            PhoneNumber = TrimToNull(request.PhoneNumber),
+            IsAvailable = true,
+            RegisteredAtUtc = DateTime.UtcNow
+        };
 
         ApplyRiderProfile(rider, request);
 
@@ -124,12 +184,11 @@ public sealed class RiderService : IRiderService
             rider.RowVersion,
             request.RowVersion);
 
-        ApplyRiderProfile(rider, request.Profile);
+        // Update requests contain the profile inside Profile.
+        await EnsureCityExistsAsync(request.Profile.CityId, ct);
 
-        await EnsureUniqueEmailAsync(
-            rider.NormalizedEmail,
-            id,
-            ct);
+        // Email and phone are absent from the update DTO.
+        ApplyRiderProfile(rider, request.Profile);
 
         await SaveChangesAsync(ct);
     }
@@ -200,7 +259,10 @@ public sealed class RiderService : IRiderService
             query = query.Where(x =>
                 x.Name.Contains(term) ||
                 x.Country.Contains(term) ||
-                (x.City != null && x.City.Contains(term)));
+                (
+                    x.City != null &&
+                    x.City.Contains(term)
+                ));
         }
 
         var totalCount = await query.CountAsync(ct);
@@ -338,9 +400,13 @@ public sealed class RiderService : IRiderService
         {
             var term = search.Trim();
 
-            query = query.Where(x =>
-                x.Tournament.Name.Contains(term) ||
-                x.Tournament.Country.Contains(term));
+            // Tournament search starts at 3 characters.
+            if (term.Length >= 3)
+            {
+                query = query.Where(x =>
+                    x.Tournament.Name.Contains(term) ||
+                    x.Tournament.Country.Contains(term));
+            }
         }
 
         if (status.HasValue)
@@ -383,7 +449,7 @@ public sealed class RiderService : IRiderService
 
         await using var transaction = await _db.Database
             .BeginTransactionAsync(
-                System.Data.IsolationLevel.Serializable,
+                IsolationLevel.Serializable,
                 ct);
 
         var rider = await RequireRiderAsync(riderId, ct);
@@ -398,11 +464,10 @@ public sealed class RiderService : IRiderService
             tournamentId,
             ct);
 
-        var alreadyAssigned = await _db.RiderTournaments
-            .AnyAsync(
-                x => x.RiderId == riderId &&
-                     x.TournamentId == tournamentId,
-                ct);
+        var alreadyAssigned = await _db.RiderTournaments.AnyAsync(
+            x => x.RiderId == riderId &&
+                 x.TournamentId == tournamentId,
+            ct);
 
         if (alreadyAssigned)
         {
@@ -475,7 +540,7 @@ public sealed class RiderService : IRiderService
             });
         }
 
-        // Advance the parent rowversion when its horse collection changes.
+        // Updating children must also advance the parent's RowVersion.
         _db.Entry(participation)
             .Property(x => x.IsAvailable)
             .IsModified = true;
@@ -493,7 +558,7 @@ public sealed class RiderService : IRiderService
 
         await using var transaction = await _db.Database
             .BeginTransactionAsync(
-                System.Data.IsolationLevel.Serializable,
+                IsolationLevel.Serializable,
                 ct);
 
         var participation = await RequireParticipationAsync(
@@ -532,7 +597,7 @@ public sealed class RiderService : IRiderService
 
         await using var transaction = await _db.Database
             .BeginTransactionAsync(
-                System.Data.IsolationLevel.Serializable,
+                IsolationLevel.Serializable,
                 ct);
 
         var participation = await RequireParticipationAsync(
@@ -638,6 +703,24 @@ public sealed class RiderService : IRiderService
 
     #region Validation
 
+    private async Task EnsureCityExistsAsync(
+        int? cityId,
+        CancellationToken ct)
+    {
+        if (cityId is not int selectedCityId || selectedCityId <= 0)
+        {
+            throw BadRequest("Please select a valid city.");
+        }
+
+        var exists = await _db.Cities
+            .AnyAsync(city => city.Id == selectedCityId, ct);
+
+        if (!exists)
+        {
+            throw BadRequest("The selected city does not exist.");
+        }
+    }
+
     private static void ValidateDto(object? request)
     {
         if (request is null)
@@ -676,7 +759,8 @@ public sealed class RiderService : IRiderService
 
         if (pageSize is < 1 or > 100)
         {
-            throw BadRequest("PageSize must be between 1 and 100.");
+            throw BadRequest(
+                "PageSize must be between 1 and 100.");
         }
 
         if ((long)(page - 1) * pageSize > int.MaxValue)
@@ -685,8 +769,32 @@ public sealed class RiderService : IRiderService
         }
     }
 
-    private static int GetSkip(int page, int pageSize)
-        => checked((page - 1) * pageSize);
+    private static int GetSkip(
+        int page,
+        int pageSize)
+    {
+        return checked((page - 1) * pageSize);
+    }
+
+    private static void ValidateHandicapRange(
+        int? handicapMin,
+        int? handicapMax)
+    {
+        if (handicapMin is < -2 or > 10 ||
+            handicapMax is < -2 or > 10)
+        {
+            throw BadRequest(
+                "Handicap range must be between -2 and 10.");
+        }
+
+        if (handicapMin.HasValue &&
+            handicapMax.HasValue &&
+            handicapMin.Value > handicapMax.Value)
+        {
+            throw BadRequest(
+                "Minimum handicap cannot exceed maximum handicap.");
+        }
+    }
 
     private async Task EnsureUniqueEmailAsync(
         string normalizedEmail,
@@ -695,14 +803,16 @@ public sealed class RiderService : IRiderService
     {
         var exists = await _db.Riders.AnyAsync(
             x => x.NormalizedEmail == normalizedEmail &&
-                 (!excludingRiderId.HasValue ||
-                  x.Id != excludingRiderId.Value),
+                 (
+                     !excludingRiderId.HasValue ||
+                     x.Id != excludingRiderId.Value
+                 ),
             ct);
 
         if (exists)
         {
             throw Conflict(
-                "Another rider already uses this email address.");
+                "An account with this email already exists.");
         }
     }
 
@@ -727,23 +837,25 @@ public sealed class RiderService : IRiderService
     {
         if (horses is null || horses.Length is < 1 or > 50)
         {
-            throw BadRequest("Provide between 1 and 50 horses.");
+            throw BadRequest(
+                "Provide between 1 and 50 horses.");
         }
 
-        if (horses.Any(x =>
-                string.IsNullOrWhiteSpace(x) ||
-                x.Trim().Length > 150))
+        if (horses.Any(name =>
+                string.IsNullOrWhiteSpace(name) ||
+                name.Trim().Length > 150))
         {
             throw BadRequest(
                 "Each horse name must contain 1–150 characters.");
         }
 
         var names = horses
-            .Select(x => x.Trim())
+            .Select(name => name.Trim())
             .ToArray();
 
-        if (names.Distinct(StringComparer.OrdinalIgnoreCase).Count()
-            != names.Length)
+        if (names
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Count() != names.Length)
         {
             throw BadRequest(
                 "Duplicate horse names are not allowed.");
@@ -794,23 +906,35 @@ public sealed class RiderService : IRiderService
     {
         var allowed = (current, next) switch
         {
-            (ParticipationStatus.Preparing,
-             ParticipationStatus.InTransit) => true,
+            (
+                ParticipationStatus.Preparing,
+                ParticipationStatus.InTransit
+            ) => true,
 
-            (ParticipationStatus.InTransit,
-             ParticipationStatus.Active) => true,
+            (
+                ParticipationStatus.InTransit,
+                ParticipationStatus.Active
+            ) => true,
 
-            (ParticipationStatus.Active,
-             ParticipationStatus.Completed) => true,
+            (
+                ParticipationStatus.Active,
+                ParticipationStatus.Completed
+            ) => true,
 
-            (ParticipationStatus.Preparing,
-             ParticipationStatus.Canceled) => true,
+            (
+                ParticipationStatus.Preparing,
+                ParticipationStatus.Canceled
+            ) => true,
 
-            (ParticipationStatus.InTransit,
-             ParticipationStatus.Canceled) => true,
+            (
+                ParticipationStatus.InTransit,
+                ParticipationStatus.Canceled
+            ) => true,
 
-            (ParticipationStatus.Active,
-             ParticipationStatus.Canceled) => true,
+            (
+                ParticipationStatus.Active,
+                ParticipationStatus.Canceled
+            ) => true,
 
             _ => false
         };
@@ -872,41 +996,66 @@ public sealed class RiderService : IRiderService
         {
             await _db.SaveChangesAsync(ct);
         }
-        catch (Microsoft.EntityFrameworkCore.DbUpdateConcurrencyException)
+        catch (DbUpdateConcurrencyException)
         {
             throw Conflict(
                 "This record was changed or deleted by another user. " +
                 "Reload it before trying again.");
         }
-        catch (Microsoft.EntityFrameworkCore.DbUpdateException ex)
-            when (ex.InnerException is Microsoft.Data.SqlClient.SqlException
-            { Number: 2601 or 2627 })
+        catch (DbUpdateException ex)
+            when (ex.InnerException is SqlException
+            {
+                Number: 2601 or 2627
+            })
         {
             throw Conflict(
                 "A record with the same unique value already exists.");
         }
-        catch (Microsoft.EntityFrameworkCore.DbUpdateException ex)
-            when (ex.InnerException is Microsoft.Data.SqlClient.SqlException
-            { Number: 547 })
+        catch (DbUpdateException ex)
+            when (ex.InnerException is SqlException
+            {
+                Number: 547
+            })
         {
             throw Conflict(
                 "Related records prevent this operation.");
         }
     }
+
     #endregion
 
     #region Mapping
 
     private static void ApplyRiderProfile(
         Rider rider,
-        RiderRequest request)
+        RiderProfileRequest request)
     {
+        if (request.HandicapLevel is not int handicap)
+        {
+            throw BadRequest("Please select the handicap.");
+        }
+
+        if (handicap is < -2 or > 10)
+        {
+            throw BadRequest(
+                "Handicap number must be between -2 and 10.");
+        }
+
+        if (request.CityId is not int cityId || cityId <= 0)
+        {
+            throw BadRequest("Please select a valid city.");
+        }
+
         rider.FullName = request.FullName.Trim();
-        rider.Nationality = request.Nationality.Trim();
-        rider.Email = request.Email.Trim();
-        rider.NormalizedEmail = rider.Email.ToUpperInvariant();
-        rider.PhoneNumber = TrimToNull(request.PhoneNumber);
-        rider.HandicapLevel = request.HandicapLevel;
+
+        rider.Nationality = request.Nationality
+            .Trim()
+            .ToUpperInvariant();
+
+        // Country is determined through City.CountryId.
+        rider.CityId = cityId;
+
+        rider.HandicapLevel = handicap;
         rider.PoloTeam = TrimToNull(request.PoloTeam);
         rider.ImageUrl = TrimToNull(request.ImageUrl);
     }
@@ -923,13 +1072,18 @@ public sealed class RiderService : IRiderService
     }
 
     private static RiderResponse MapRider(
-        Rider rider,
-        int tournamentCount)
+    Rider rider,
+    int tournamentCount)
     {
         return new RiderResponse(
             rider.Id,
             rider.FullName,
             rider.Nationality,
+            rider.City?.CountryId,
+            rider.City?.Country.Code,
+            rider.City?.Country.Name,
+            rider.CityId,
+            rider.City?.Name,
             rider.Email,
             rider.PhoneNumber,
             rider.HandicapLevel,
@@ -970,27 +1124,39 @@ public sealed class RiderService : IRiderService
                 participation.IsAvailable,
             participation.Status,
             participation.Horses
-                .OrderBy(x => x.Name)
-                .Select(x => x.Name)
+                .OrderBy(horse => horse.Name)
+                .Select(horse => horse.Name)
                 .ToArray(),
             Convert.ToBase64String(participation.RowVersion));
     }
 
     private static string? TrimToNull(string? value)
-        => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+    {
+        return string.IsNullOrWhiteSpace(value)
+            ? null
+            : value.Trim();
+    }
 
     #endregion
 
     #region Exceptions
 
     private static AppException BadRequest(string message)
-        => new(400, message);
+    {
+        return new AppException(400, message);
+    }
 
     private static AppException NotFound(string resource)
-        => new(404, $"{resource} not found.");
+    {
+        return new AppException(
+            404,
+            $"{resource} not found.");
+    }
 
     private static AppException Conflict(string message)
-        => new(409, message);
+    {
+        return new AppException(409, message);
+    }
 
     #endregion
 }

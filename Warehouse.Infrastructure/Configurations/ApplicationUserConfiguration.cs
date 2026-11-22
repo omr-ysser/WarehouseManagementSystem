@@ -1,16 +1,10 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
-
-using Microsoft.EntityFrameworkCore;
+﻿using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata.Builders;
 using Warehouse.Infrastructure.Identity;
 
 namespace Warehouse.Infrastructure.Persistence.Configurations;
 
-public class ApplicationUserConfiguration
+public sealed class ApplicationUserConfiguration
     : IEntityTypeConfiguration<ApplicationUser>
 {
     public void Configure(EntityTypeBuilder<ApplicationUser> builder)
@@ -26,23 +20,23 @@ public class ApplicationUserConfiguration
                 "LEN(LTRIM(RTRIM([Email]))) >= 3");
         });
 
-        builder.Property(x => x.FullName)
+        builder.Property(user => user.FullName)
             .IsRequired()
             .HasMaxLength(100);
 
-        builder.Property(x => x.Email)
+        builder.Property(user => user.Email)
             .IsRequired()
             .HasMaxLength(256);
 
-        builder.Property(x => x.NormalizedEmail)
+        builder.Property(user => user.NormalizedEmail)
             .IsRequired()
             .HasMaxLength(256);
 
-        builder.Property(x => x.PhoneNumber)
-            .IsRequired()
+        builder.Property(user => user.PhoneNumber)
+            .IsRequired(false)
             .HasMaxLength(16);
 
-        builder.HasIndex(x => x.NormalizedEmail)
+        builder.HasIndex(user => user.NormalizedEmail)
             .HasDatabaseName("EmailIndex")
             .IsUnique();
     }

@@ -1,4 +1,5 @@
-﻿using MediatR;
+﻿using System.ComponentModel.DataAnnotations;
+using MediatR;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Warehouse.Application.DTOs;
@@ -9,25 +10,45 @@ using Warehouse.Domain.Entities;
 namespace Warehouse.Api.Controllers;
 
 [ApiController]
+[Authorize]
 [Route("api/riders")]
 public sealed class RidersController(ISender sender) : ControllerBase
 {
+    #region Get Riders
+
     [HttpGet]
     [Authorize(Policy = "Permission:Riders.View")]
     public async Task<ActionResult<PageResponse<RiderResponse>>> GetAll(
         CancellationToken ct,
         [FromQuery] string? search = null,
         [FromQuery] bool? available = null,
-        [FromQuery] int page = 1,
-        [FromQuery] int pageSize = 20)
+        [FromQuery] string[]? nationalities = null,
+        [FromQuery, Range(-2, 10)] int? minHandicap = null,
+        [FromQuery, Range(-2, 10)] int? maxHandicap = null,
+        [FromQuery, Range(1, int.MaxValue)] int page = 1,
+        [FromQuery, Range(1, 100)] int pageSize = 20)
     {
+        if (minHandicap.HasValue &&
+            maxHandicap.HasValue &&
+            minHandicap.Value > maxHandicap.Value)
+        {
+            ModelState.AddModelError(
+                nameof(minHandicap),
+                "Minimum handicap must not exceed maximum handicap.");
+
+            return ValidationProblem(ModelState);
+        }
+
         var result = await sender.Send(
-            new GetRidersQuery(
-                search,
-                available,
-                page,
-                pageSize),
-            ct);
+      new GetRidersQuery(
+          Search: search,
+          Available: available,
+          Page: page,
+          PageSize: pageSize,
+          Nationalities: nationalities,
+          HandicapMin: minHandicap,
+          HandicapMax: maxHandicap),
+      ct);
 
         return Ok(result);
     }
@@ -45,6 +66,10 @@ public sealed class RidersController(ISender sender) : ControllerBase
         return Ok(result);
     }
 
+    #endregion
+
+    #region Create Rider
+
     [HttpPost]
     [Authorize(Policy = "Permission:Riders.Create")]
     public async Task<ActionResult<RiderResponse>> Create(
@@ -61,6 +86,10 @@ public sealed class RidersController(ISender sender) : ControllerBase
             result);
     }
 
+    #endregion
+
+    #region Update Rider
+
     [HttpPut("{id:int}")]
     [Authorize(Policy = "Permission:Riders.Edit")]
     public async Task<IActionResult> Update(
@@ -75,11 +104,15 @@ public sealed class RidersController(ISender sender) : ControllerBase
         return NoContent();
     }
 
+    #endregion
+
+    #region Delete Rider
+
     [HttpDelete("{id:int}")]
     [Authorize(Policy = "Permission:Riders.Delete")]
     public async Task<IActionResult> Delete(
         int id,
-        [FromQuery] string rowVersion,
+        [FromQuery, Required] string rowVersion,
         CancellationToken ct)
     {
         await sender.Send(
@@ -88,6 +121,10 @@ public sealed class RidersController(ISender sender) : ControllerBase
 
         return NoContent();
     }
+
+    #endregion
+
+    #region Change Rider Availability
 
     [HttpPatch("{id:int}/availability")]
     [Authorize(Policy = "Permission:Riders.ChangeStatus")]
@@ -103,6 +140,10 @@ public sealed class RidersController(ISender sender) : ControllerBase
         return NoContent();
     }
 
+    #endregion
+
+    #region Get Rider Tournaments
+
     [HttpGet("{riderId:int}/tournaments")]
     [Authorize(Policy = "Permission:Riders.View")]
     public async Task<ActionResult<PageResponse<ParticipationResponse>>>
@@ -111,8 +152,8 @@ public sealed class RidersController(ISender sender) : ControllerBase
             CancellationToken ct,
             [FromQuery] string? search = null,
             [FromQuery] ParticipationStatus? status = null,
-            [FromQuery] int page = 1,
-            [FromQuery] int pageSize = 20)
+            [FromQuery, Range(1, int.MaxValue)] int page = 1,
+            [FromQuery, Range(1, 100)] int pageSize = 20)
     {
         var result = await sender.Send(
             new GetRiderTournamentsQuery(
@@ -125,6 +166,10 @@ public sealed class RidersController(ISender sender) : ControllerBase
 
         return Ok(result);
     }
+
+    #endregion
+
+    #region Assign Tournament
 
     [HttpPost("{riderId:int}/tournaments/{tournamentId:int}")]
     [Authorize(Policy = "Permission:Riders.ManageTournaments")]
@@ -146,6 +191,10 @@ public sealed class RidersController(ISender sender) : ControllerBase
             result);
     }
 
+    #endregion
+
+    #region Update Tournament Horses
+
     [HttpPut("{riderId:int}/tournaments/{tournamentId:int}/horses")]
     [Authorize(Policy = "Permission:Riders.ManageTournaments")]
     public async Task<IActionResult> UpdateTournamentHorses(
@@ -163,6 +212,10 @@ public sealed class RidersController(ISender sender) : ControllerBase
 
         return NoContent();
     }
+
+    #endregion
+
+    #region Change Tournament Availability
 
     [HttpPatch(
         "{riderId:int}/tournaments/{tournamentId:int}/availability")]
@@ -183,6 +236,10 @@ public sealed class RidersController(ISender sender) : ControllerBase
         return NoContent();
     }
 
+    #endregion
+
+    #region Change Tournament Status
+
     [HttpPatch("{riderId:int}/tournaments/{tournamentId:int}/status")]
     [Authorize(Policy = "Permission:Riders.ManageTournaments")]
     public async Task<IActionResult> ChangeTournamentStatus(
@@ -201,12 +258,16 @@ public sealed class RidersController(ISender sender) : ControllerBase
         return NoContent();
     }
 
+    #endregion
+
+    #region Remove Tournament
+
     [HttpDelete("{riderId:int}/tournaments/{tournamentId:int}")]
     [Authorize(Policy = "Permission:Riders.ManageTournaments")]
     public async Task<IActionResult> RemoveTournament(
         int riderId,
         int tournamentId,
-        [FromQuery] string rowVersion,
+        [FromQuery, Required] string rowVersion,
         CancellationToken ct)
     {
         await sender.Send(
@@ -218,4 +279,6 @@ public sealed class RidersController(ISender sender) : ControllerBase
 
         return NoContent();
     }
+
+    #endregion
 }
