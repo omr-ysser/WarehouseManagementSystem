@@ -9,6 +9,7 @@ using Warehouse.Infrastructure.Persistence.Repositories;
 using Warehouse.Infrastructure.Seeding;
 using Warehouse.Infrastructure.Services;
 
+
 namespace Warehouse.Infrastructure;
 
 public static class DependencyInjection
@@ -69,6 +70,12 @@ public static class DependencyInjection
             CustomerLinkedRiderService>();
 
         services.AddScoped<IdentitySeeder>();
+        services.AddScoped<ISupplierService, SupplierService>();
+        services.AddScoped<
+    ISupplierDocumentFileService,
+    SupplierDocumentFileService>();
+        services.AddScoped<ISupplierRequestService, SupplierRequestService>();
+        services.AddScoped<ISupplierDocumentService, SupplierDocumentService>();
 
         return services;
     }

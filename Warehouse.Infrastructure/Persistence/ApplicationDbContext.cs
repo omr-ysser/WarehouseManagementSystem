@@ -47,8 +47,18 @@ public class ApplicationDbContext
     public DbSet<CustomerPasswordEmail> CustomerPasswordEmails
     => Set<CustomerPasswordEmail>();
     public DbSet<Country> Countries => Set<Country>();
+    public DbSet<Supplier> Suppliers => Set<Supplier>();
+
+    public DbSet<SupplierDocument> SupplierDocuments
+        => Set<SupplierDocument>();
 
     public DbSet<City> Cities => Set<City>();
+    public DbSet<SupplierRequest> SupplierRequests => Set<SupplierRequest>();
+
+    public DbSet<SupplierRequestFinanceActivity> SupplierRequestFinanceActivities =>
+        Set<SupplierRequestFinanceActivity>();
+    public DbSet<SupplierStatusActivity> SupplierStatusActivities =>
+    Set<SupplierStatusActivity>();
     protected override void OnModelCreating(ModelBuilder builder)
     {
         base.OnModelCreating(builder);

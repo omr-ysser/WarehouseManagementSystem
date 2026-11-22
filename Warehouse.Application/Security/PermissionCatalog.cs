@@ -51,6 +51,16 @@ public static class PermissionCatalog
         "Transactions.Delete",
 
         "Stock.View",
+        "Suppliers.ViewDocuments",
+        "Suppliers.View",
+"Suppliers.Create",
+"Suppliers.AddNote",
+"Suppliers.Export",
+
+"Requests.View",
+"Requests.Create",
+"Requests.EditFinance",
+"Requests.ViewFinanceActivity",
 
         .. RiderModule
     ];
